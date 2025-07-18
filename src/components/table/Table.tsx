@@ -102,20 +102,43 @@ const samples = [
   },
 ];
 
-
 const columnHelper = createColumnHelper();
+
+const formatValue = (val, columnId) => {
+  if (val === null || val === undefined) return "";
+  if (columnId === "assaysPerformed") {
+    return `${val?.length || 0} assays`;
+  }
+  if (columnId === "isPooled") {
+    return val ? "Yes" : "No";
+  }
+  if (columnId === "lastUpdated" || columnId === "collectionDate") {
+    const date = new Date(val);
+    return !isNaN(date.getTime()) ? date.toLocaleDateString() : val || "";
+  }
+  if (columnId === "totalReadCount") {
+    const num = Number(val);
+    return !isNaN(num) ? num.toLocaleString() : val || "";
+  }
+  return val;
+};
 
 export const EditableCell = ({ getValue, row, column, table }) => {
   const initialValue = getValue();
   const [value, setValue] = useState(initialValue);
-  const [isEditing, setIsEditing] = useState(false);
   const inputRef = useRef(null);
 
   const cellId = `${row.id}-${column.id}`;
-  const { selectedCells, editingCell, setEditingCell, handleCellSelect } =
-    table.options.meta;
+  const {
+    selectedCells,
+    editingCell,
+    setEditingCell,
+    handleCellSelect,
+    activeCell,
+  } = table.options.meta;
   const isSelected = selectedCells.has(cellId);
   const isCellEditing = editingCell === cellId;
+  const isActive = activeCell === cellId;
 
   useEffect(() => {
     setValue(initialValue);
@@ -143,9 +166,14 @@ export const EditableCell = ({ getValue, row, column, table }) => {
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === "Enter" || e.key === "Tab") {
+    if (e.key === "Enter") {
       e.preventDefault();
       onBlur();
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      onBlur();
+      table.options.meta.handleTab(row.index, column.id, e.shiftKey);
     }
     if (e.key === "Escape") {
       setValue(initialValue);
@@ -153,28 +181,11 @@ export const EditableCell = ({ getValue, row, column, table }) => {
     }
   };
 
-  // Format display value based on column type
-  const formatValue = (val) => {
-    if (column.id === "assaysPerformed") {
-      return `${val?.length || 0} assays`;
-    }
-    if (column.id === "isPooled") {
-      return val ? "Yes" : "No";
-    }
-    if (column.id === "lastUpdated" || column.id === "collectionDate") {
-      return new Date(val).toLocaleDateString();
-    }
-    if (column.id === "totalReadCount") {
-      return val?.toLocaleString();
-    }
-    return val;
-  };
-
   if (isCellEditing) {
     return (
       <input
         ref={inputRef}
-        value={value}
+        value={value || ""}
         onChange={(e) => setValue(e.target.value)}
         onBlur={onBlur}
         onKeyDown={handleKeyDown}
@@ -187,14 +198,16 @@ export const EditableCell = ({ getValue, row, column, table }) => {
   return (
     <div
       className={`h-full px-2 py-1 cursor-cell select-none ${
-        isSelected
-          ? "bg-blue-100 border-2 border-blue-500"
-          : "border border-transparent"
-      } hover:bg-gray-50`}
+        isSelected ? "bg-blue-100" : ""
+      } ${
+        isActive
+          ? "border-2 border-blue-500"
+          : "border border-transparent hover:bg-gray-50"
+      }`}
       onDoubleClick={onDoubleClick}
       onMouseDown={onMouseDown}
     >
-      {formatValue(value)}
+      {formatValue(value, column.id)}
     </div>
   );
 };
@@ -205,6 +218,7 @@ export default function SamplesTable() {
   const [editingCell, setEditingCell] = useState(null);
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState(null);
+  const [activeCell, setActiveCell] = useState(null);
   const tableRef = useRef(null);
 
   const columns = React.useMemo(
@@ -224,6 +238,7 @@ export default function SamplesTable() {
       columnHelper.accessor("assaysPerformed", {
         header: "Assays",
         cell: EditableCell,
+        enableEditing: false,
       }),
       columnHelper.accessor("isPooled", {
         header: "Pooled",
@@ -282,7 +297,6 @@ export default function SamplesTable() {
       const [rowId, columnId] = cellId.split("-");
 
       if (event.shiftKey && selectionStart) {
-        // Range selection
         const [startRowId, startColumnId] = selectionStart.split("-");
         const startRowIndex = parseInt(startRowId);
         const endRowIndex = parseInt(rowId);
@@ -305,8 +319,8 @@ export default function SamplesTable() {
           }
         }
         setSelectedCells(newSelection);
+        setActiveCell(cellId);
       } else if (event.ctrlKey || event.metaKey) {
-        // Multi-select
         setSelectedCells((prev) => {
           const newSet = new Set(prev);
           if (newSet.has(cellId)) {
@@ -317,10 +331,11 @@ export default function SamplesTable() {
           return newSet;
         });
         setSelectionStart(cellId);
+        setActiveCell(cellId);
       } else {
-        // Single select
         setSelectedCells(new Set([cellId]));
         setSelectionStart(cellId);
+        setActiveCell(cellId);
         setIsSelecting(true);
       }
     },
@@ -335,6 +350,10 @@ export default function SamplesTable() {
       if (!cell) return;
 
       const cellId = cell.dataset.cellId;
+      if (cellId === activeCell) return;
+
+      setActiveCell(cellId);
+
       const [rowId, columnId] = cellId.split("-");
       const [startRowId, startColumnId] = selectionStart.split("-");
 
@@ -360,12 +379,148 @@ export default function SamplesTable() {
       }
       setSelectedCells(newSelection);
     },
-    [isSelecting, selectionStart, editingCell, columns]
+    [isSelecting, selectionStart, editingCell, columns, activeCell]
   );
 
   const handleMouseUp = useCallback(() => {
     setIsSelecting(false);
   }, []);
+
+  const handleCopy = useCallback(() => {
+    if (selectedCells.size === 0) return;
+
+    const cellIds = [...selectedCells];
+    const cells = cellIds.map((id) => {
+      const [row, col] = id.split("-");
+      return {
+        rowIndex: parseInt(row, 10),
+        colId: col,
+        colIndex: columns.findIndex((c) => c.accessorKey === col),
+      };
+    });
+
+    const minRow = Math.min(...cells.map((c) => c.rowIndex));
+    const maxRow = Math.max(...cells.map((c) => c.rowIndex));
+    const minCol = Math.min(...cells.map((c) => c.colIndex));
+    const maxCol = Math.max(...cells.map((c) => c.colIndex));
+
+    const grid = Array(maxRow - minRow + 1)
+      .fill(null)
+      .map(() => Array(maxCol - minCol + 1).fill(""));
+
+    cells.forEach((cell) => {
+      const value = data[cell.rowIndex][cell.colId];
+      grid[cell.rowIndex - minRow][cell.colIndex - minCol] = formatValue(
+        value,
+        cell.colId
+      );
+    });
+
+    const clipboardText = grid.map((row) => row.join("\t")).join("\n");
+    navigator.clipboard.writeText(clipboardText);
+  }, [selectedCells, data, columns]);
+
+  const handlePaste = useCallback(
+    async (startCell) => {
+      const start = startCell || selectionStart;
+      if (!start) return;
+
+      const text = await navigator.clipboard.readText();
+      const pastedRows = text
+        .trim()
+        .split("\n")
+        .map((row) => row.split("\t"));
+
+      if (pastedRows.length === 0) return;
+
+      const [startRowId, startColumnId] = start.split("-");
+      const startRowIndex = parseInt(startRowId, 10);
+      const startColIndex = columns.findIndex(
+        (c) => c.accessorKey === startColumnId
+      );
+
+      const newUpdatedCells = new Set();
+
+      setData((oldData) => {
+        const newData = oldData.map((r) => ({ ...r }));
+        pastedRows.forEach((row, rowIndexOffset) => {
+          const tableRowIndex = startRowIndex + rowIndexOffset;
+          if (tableRowIndex < newData.length) {
+            row.forEach((cellValue, colIndexOffset) => {
+              const tableColIndex = startColIndex + colIndexOffset;
+              if (tableColIndex < columns.length) {
+                const column = columns[tableColIndex];
+                const columnId = column.accessorKey;
+
+                if (column.enableEditing === false) return;
+
+                let parsedValue = cellValue;
+                if (columnId === "isPooled") {
+                  const lowerCellValue = cellValue.trim().toLowerCase();
+                  parsedValue =
+                    lowerCellValue === "yes" || lowerCellValue === "true";
+                } else if (columnId === "totalReadCount") {
+                  const num = parseInt(cellValue.replace(/,/g, ""), 10);
+                  if (!isNaN(num)) {
+                    parsedValue = num;
+                  }
+                } else if (
+                  columnId === "collectionDate" ||
+                  columnId === "lastUpdated"
+                ) {
+                  const d = new Date(cellValue);
+                  if (!isNaN(d.getTime())) {
+                    parsedValue = d.toISOString();
+                  }
+                }
+
+                newData[tableRowIndex][columnId] = parsedValue;
+                newUpdatedCells.add(`${tableRowIndex}-${columnId}`);
+              }
+            });
+          }
+        });
+        return newData;
+      });
+
+      setSelectedCells(newUpdatedCells);
+    },
+    [selectionStart, columns]
+  );
+
+  const handleTab = useCallback(
+    (rowIndex, colId, shiftKey) => {
+      const colIndex = columns.findIndex((c) => c.accessorKey === colId);
+      let nextRow = rowIndex;
+      let nextCol = colIndex + (shiftKey ? -1 : 1);
+
+      if (nextCol < 0) {
+        nextCol = columns.length - 1;
+        nextRow--;
+      } else if (nextCol >= columns.length) {
+        nextCol = 0;
+        nextRow++;
+      }
+
+      if (nextRow < 0) {
+        nextRow = data.length - 1;
+      }
+
+      if (nextRow >= data.length) {
+        // Optionally add a new row
+        // setData(old => [...old, { ...empty_row_data }])
+        // nextRow = data.length;
+        return; // For now, just stop
+      }
+
+      const nextCellId = `${nextRow}-${columns[nextCol].accessorKey}`;
+      setSelectedCells(new Set([nextCellId]));
+      setSelectionStart(nextCellId);
+      setActiveCell(nextCellId);
+      setTimeout(() => setEditingCell(nextCellId), 0);
+    },
+    [columns, data.length]
+  );
 
   useEffect(() => {
     if (isSelecting) {
@@ -379,6 +534,112 @@ export default function SamplesTable() {
     };
   }, [isSelecting, handleMouseMove, handleMouseUp]);
 
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (editingCell) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+        e.preventDefault();
+        handleCopy();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+        e.preventDefault();
+        handlePaste();
+        return;
+      }
+
+      if (activeCell) {
+        if (e.key.length === 1 && e.key.match(/[a-zA-Z0-9]/)) {
+          const [rowId, colId] = activeCell.split("-");
+          const column = columns.find((c) => c.accessorKey === colId);
+          if (column.enableEditing !== false) {
+            e.preventDefault();
+            updateData(parseInt(rowId), colId, e.key);
+            setEditingCell(activeCell);
+          }
+          return;
+        }
+
+        if (e.key === "Enter") {
+          e.preventDefault();
+          setEditingCell(activeCell);
+          return;
+        }
+
+        const arrowKeys = [
+          "ArrowUp",
+          "ArrowDown",
+          "ArrowLeft",
+          "ArrowRight",
+        ];
+        if (arrowKeys.includes(e.key)) {
+          e.preventDefault();
+          const [rowId, colId] = activeCell.split("-");
+          let rowIndex = parseInt(rowId);
+          let colIndex = columns.findIndex((c) => c.accessorKey === colId);
+
+          switch (e.key) {
+            case "ArrowUp":
+              rowIndex = Math.max(0, rowIndex - 1);
+              break;
+            case "ArrowDown":
+              rowIndex = Math.min(data.length - 1, rowIndex + 1);
+              break;
+            case "ArrowLeft":
+              colIndex = Math.max(0, colIndex - 1);
+              break;
+            case "ArrowRight":
+              colIndex = Math.min(columns.length - 1, colIndex + 1);
+              break;
+          }
+
+          const newActiveCellId = `${rowIndex}-${columns[colIndex].accessorKey}`;
+
+          if (e.shiftKey) {
+            setActiveCell(newActiveCellId);
+            const [startRowId, startColumnId] = selectionStart.split("-");
+            const startRowIndex = parseInt(startRowId);
+            const startColIndex = columns.findIndex(
+              (c) => c.accessorKey === startColumnId
+            );
+
+            const minRow = Math.min(startRowIndex, rowIndex);
+            const maxRow = Math.max(startRowIndex, rowIndex);
+            const minCol = Math.min(startColIndex, colIndex);
+            const maxCol = Math.max(startColIndex, colIndex);
+
+            const newSelection = new Set();
+            for (let r = minRow; r <= maxRow; r++) {
+              for (let c = minCol; c <= maxCol; c++) {
+                newSelection.add(`${r}-${columns[c].accessorKey}`);
+              }
+            }
+            setSelectedCells(newSelection);
+          } else {
+            setSelectedCells(new Set([newActiveCellId]));
+            setSelectionStart(newActiveCellId);
+            setActiveCell(newActiveCellId);
+          }
+        }
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [
+    handleCopy,
+    handlePaste,
+    editingCell,
+    activeCell,
+    columns,
+    data.length,
+    selectionStart,
+    updateData,
+  ]);
+
   const table = useReactTable({
     data,
     columns,
@@ -389,6 +650,8 @@ export default function SamplesTable() {
       editingCell,
       setEditingCell,
       handleCellSelect,
+      activeCell,
+      handleTab,
     },
   });
 
@@ -396,8 +659,10 @@ export default function SamplesTable() {
     <div className="p-4">
       <h2 className="mb-4 text-2xl font-bold">Samples Table</h2>
       <div className="mb-4 text-sm text-gray-600">
-        • Single click to select • Double click to edit • Shift+click for range
-        selection • Ctrl/Cmd+click for multi-select
+        • Single click to select • Double click or Enter to edit • Arrow keys to
+        navigate • Shift+click or Shift+arrows for range selection •
+        Ctrl/Cmd+click for multi-select • Ctrl/Cmd+C to copy • Ctrl/Cmd+V to
+        paste
       </div>
 
       <div className="overflow-auto border border-gray-300 rounded-lg">
