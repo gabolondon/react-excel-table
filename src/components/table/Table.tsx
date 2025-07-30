@@ -218,7 +218,7 @@ export default function SamplesTable() {
   const [editingCell, setEditingCell] = useState(null);
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState(null);
-  const [activeCell, setActiveCell] = useState(null);
+  const [activeCell, setActiveCell] = useState<string | null>(null);
   const tableRef = useRef(null);
 
   const columns = React.useMemo(
