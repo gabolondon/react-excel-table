@@ -6,6 +6,8 @@
 .DS_Store
 .AppleDouble
 .LSOverride
+temp/
+
 
 # Icon must end with two \r
 Icon
